@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام حضور حمام السباحة</title>
+    <style>
+        :root {
+            --primary: #0284c7;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #0f172a;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 16px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background: var(--card);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }
+
+        h1, h2 {
+            text-align: center;
+            color: var(--primary);
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        select, input, button {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #cbd5e1;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+
+        button {
+            border: none;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+
+        .btn-checkin { background-color: var(--success); }
+        .btn-checkout { background-color: var(--danger); }
+        .btn-admin { background-color: #475569; }
+
+        .status-box {
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
+            text-align: center;
+            font-weight: bold;
+            display: none;
+        }
+
+        .status-box.active { display: block; }
+        .info { background: #e0f2fe; color: #0369a1; }
+        .error { background: #fee2e2; color: #b91c1c; }
+        .success { background: #dcfce7; color: #15803d; }
+
+        .admin-section {
+            margin-top: 32px;
+            border-top: 2px dashed #e2e8f0;
+            padding-top: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+            font-size: 14px;
+        }
+
+        th, td {
+            border: 1px solid #e2e8f0;
+            padding: 8px;
+            text-align: center;
+        }
+
+        th { background-color: #f1f5f9; }
+    </style>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // Firebase Configuration From Your Dashboard
+        const firebaseConfig = {
+            apiKey: "AIzaSyBgK6L1mXL10LaYK884x7Hg...", // تم استخراجه من الصورة
+            authDomain: "pool-attendance.firebaseapp.com",
+            projectId: "pool-attendance",
+            storageBucket: "pool-attendance.appspot.com",
+            messagingSenderId: "864019578267",
+            appId: "1:864019578267:web:ae968adc42bf93de70b53e"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // International Park Pool Coordinates (International Garden, Faiyum)
+        const POOL_LAT = 29.3177795;
+        const POOL_LNG = 30.8337485;
+        const MAX_DISTANCE_METERS = 100;
+
+        // Calculate Haversine Distance in Meters
+        function getDistanceInMeters(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+            return R * c;
+        }
+
+        function showStatus(message, type) {
+            const box = document.getElementById('statusBox');
+            box.className = `status-box active ${type}`;
+            box.innerText = message;
+        }
+
+        async function registerAttendance(type) {
+            const empSelect = document.getElementById('employeeSelect');
+            const selectedEmp = empSelect.value;
+
+            if (!selectedEmp) {
+                showStatus('رجاءً اختر اسم الموظف أولاً', 'error');
+                return;
+            }
+
+            showStatus('جاري التحقق من موقع الـ GPS...', 'info');
+
+            if (!navigator.geolocation) {
+                showStatus('متصفحك لا يدعم تحديد الموقع الجغرافي', 'error');
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(async (position) => {
+                const userLat = position.coords.latitude;
+                const userLng = position.coords.longitude;
+
+                const distance = getDistanceInMeters(userLat, userLng, POOL_LAT, POOL_LNG);
+
+                if (distance > MAX_DISTANCE_METERS) {
+                    showStatus(`عفواً، أنت خارج نطاق حمام السباحة (${Math.round(distance)} متر بعيداً)`, 'error');
+                    return;
+                }
+
+                try {
+                    await addDoc(collection(db, "attendance"), {
+                        employee: selectedEmp,
+                        type: type, // 'حضور' or 'انصراف'
+                        timestamp: serverTimestamp(),
+                        distanceMeters: Math.round(distance),
+                        dateString: new Date().toLocaleDateString('ar-EG'),
+                        timeString: new Date().toLocaleTimeString('ar-EG')
+                    });
+
+                    showStatus(`تم تسجيل ${type} بنجاح ✅`, 'success');
+                } catch (e) {
+                    showStatus('حدث خطأ أثناء الاتصال بقاعدة البيانات', 'error');
+                    console.error(e);
+                }
+            }, (error) => {
+                showStatus('تعذر الحصول على الموقع. تأكد من تفعيل الـ GPS والسماح للمتصفح بالوصول للموقع.', 'error');
+            }, {
+                enableHighAccuracy: true,
+                timeout: 10000
+            });
+        }
+
+        // Attach Functions to Buttons
+        window.handleCheckIn = () => registerAttendance('حضور');
+        window.handleCheckOut = () => registerAttendance('انصراف');
+
+        // Admin Dashboard Listener
+        window.checkAdminPin = () => {
+            const pin = document.getElementById('adminPin').value;
+            if (pin === '1234') { // PIN تجريبي
+                document.getElementById('adminPanel').style.display = 'block';
+                loadLogs();
+            } else {
+                alert('رمز PIN غير صحيح');
+            }
+        };
+
+        function loadLogs() {
+            const q = query(collection(db, "attendance"), orderBy("timestamp", "desc"));
+            onSnapshot(q, (snapshot) => {
+                const tbody = document.getElementById('logsTableBody');
+                tbody.innerHTML = '';
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const row = `<tr>
+                        <td>${data.employee}</td>
+                        <td>${data.type}</td>
+                        <td>${data.timeString || 'جاري التحميل...'}</td>
+                        <td>${data.dateString || ''}</td>
+                        <td>${data.distanceMeters ? data.distanceMeters + ' متر' : '-'}</td>
+                    </tr>`;
+                    tbody.innerHTML += row;
+                });
+            });
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>🏊‍♂️ تسجيل حضور المسبح</h1>
+
+        <div class="form-group">
+            <label for="employeeSelect">اختر اسم الموظف:</label>
+            <select id="employeeSelect">
+                <option value="">-- اختر الاسم --</option>
+                <option value="يوسف فراولة (منقذ)">يوسف فراولة — 🛟 منقذ</option>
+                <option value="عمر الجزار (منقذ)">عمر الجزار — 🛟 منقذ</option>
+                <option value="محمد ميدو (منقذ)">محمد ميدو — 🛟 منقذ</option>
+                <option value="سيف وليد (منقذ)">سيف وليد — 🛟 منقذ</option>
+                <option value="نادر رمضان (منقذ)">نادر رمضان — 🛟 منقذ</option>
+                <option value="ادهم فريد (إداري)">ادهم فريد — 🧑‍💼 إداري</option>
+                <option value="سلمى مصطفى (إداري)">سلمى مصطفى — 🧑‍💼 إداري</option>
+                <option value="احمد امين (إداري)">احمد امين — 🧑‍💼 إداري</option>
+            </select>
+        </div>
+
+        <button class="btn-checkin" onclick="handleCheckIn()">🟢 تسجيل حضور</button>
+        <button class="btn-checkout" onclick="handleCheckOut()">🔴 تسجيل انصراف</button>
+
+        <div id="statusBox" class="status-box"></div>
+
+        <!-- قسم لوحة المدير -->
+        <div class="admin-section">
+            <h2>🔐 لوحة المدير</h2>
+            <div class="form-group">
+                <input type="password" id="adminPin" placeholder="أدخل رمز PIN للمدير">
+                <button class="btn-admin" onclick="checkAdminPin()">عرض السجلات الحية</button>
+            </div>
+
+            <div id="adminPanel" style="display: none;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>الموظف</th>
+                            <th>الحالة</th>
+                            <th>الوقت</th>
+                            <th>التاريخ</th>
+                            <th>البعد عن الحمام</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
